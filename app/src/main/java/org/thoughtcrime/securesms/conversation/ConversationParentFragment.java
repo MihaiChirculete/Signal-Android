@@ -3438,7 +3438,7 @@ public class ConversationParentFragment extends Fragment
 
   @Override
   public void onStickerSelected(@NonNull StickerRecord stickerRecord) {
-    sendSticker(stickerRecord, false);
+    sendSticker(stickerRecord, true);
   }
 
   @Override
@@ -3501,7 +3501,7 @@ public class ConversationParentFragment extends Fragment
 
     slideDeck.addSlide(stickerSlide);
 
-    sendMediaMessage(recipient.getId(), sendType, "", slideDeck, null, Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), expiresIn, false, initiating, clearCompose, null);
+    sendMediaMessage(recipient.getId(), sendType, "", slideDeck, inputPanel.getQuote().orElse(null), Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), expiresIn, false, initiating, clearCompose, null);
   }
 
   private void silentlySetComposeText(String text) {
@@ -4164,14 +4164,14 @@ public class ConversationParentFragment extends Fragment
                      sendButton.getSelectedSendType(),
                      "",
                      slideDeck,
-                     null,
+                     inputPanel.getQuote().orElse(null),
                      Collections.emptyList(),
                      Collections.emptyList(),
                      composeText.getMentions(),
                      expiresIn,
                      false,
                      initiating,
-                     false,
+                     true,
                      null);
   }
 
