@@ -1190,7 +1190,8 @@ public final class ConversationItem extends RelativeLayout implements BindableCo
 
       footer.setVisibility(VISIBLE);
     } else if ((hasSticker(messageRecord) && isCaptionlessMms(messageRecord)) || isBorderless(messageRecord)) {
-      bodyBubble.setBackgroundColor(Color.TRANSPARENT);
+      if(!hasQuote(messageRecord))
+        bodyBubble.setBackgroundColor(Color.TRANSPARENT);
 
       stickerStub.get().setVisibility(View.VISIBLE);
       if (mediaThumbnailStub.resolved()) mediaThumbnailStub.require().setVisibility(View.GONE);
