@@ -25,7 +25,6 @@ import org.thoughtcrime.securesms.mms.SentMediaQuality
 import org.thoughtcrime.securesms.recipients.Recipient
 import org.thoughtcrime.securesms.scribbles.ImageEditorFragment
 import org.thoughtcrime.securesms.stories.Stories
-import org.thoughtcrime.securesms.util.SingleLiveEvent
 import org.thoughtcrime.securesms.util.Util
 import org.thoughtcrime.securesms.util.livedata.Store
 import java.util.Collections
@@ -40,7 +39,8 @@ class MediaSelectionViewModel(
   initialMessage: CharSequence?,
   val isReply: Boolean,
   isStory: Boolean,
-  private val repository: MediaSelectionRepository
+  private val repository: MediaSelectionRepository,
+  private val identityChangesSince: Long = System.currentTimeMillis()
 ) : ViewModel() {
 
   private val selectedMediaSubject: Subject<List<Media>> = BehaviorSubject.create()
@@ -59,7 +59,7 @@ class MediaSelectionViewModel(
 
   private val internalHudCommands = PublishSubject.create<HudCommand>()
 
-  val mediaErrors: SingleLiveEvent<MediaValidator.FilterError> = SingleLiveEvent()
+  val mediaErrors: PublishSubject<MediaValidator.FilterError> = PublishSubject.create()
   val hudCommands: Observable<HudCommand> = internalHudCommands
 
   private val disposables = CompositeDisposable()
@@ -153,7 +153,7 @@ class MediaSelectionViewModel(
           }
 
           if (filterResult.filterError != null) {
-            mediaErrors.postValue(filterResult.filterError)
+            mediaErrors.onNext(filterResult.filterError)
           }
         }
     )
@@ -229,7 +229,7 @@ class MediaSelectionViewModel(
     }
 
     if (newMediaList.isEmpty() && !suppressEmptyError) {
-      mediaErrors.postValue(MediaValidator.FilterError.NoItems())
+      mediaErrors.onNext(MediaValidator.FilterError.NoItems())
     }
 
     selectedMediaSubject.onNext(newMediaList)
@@ -308,7 +308,7 @@ class MediaSelectionViewModel(
   fun send(
     selectedContacts: List<ContactSearchKey.RecipientSearchKey> = emptyList()
   ): Maybe<MediaSendActivityResult> {
-    return UntrustedRecords.checkForBadIdentityRecords(selectedContacts.toSet()).andThen(
+    return UntrustedRecords.checkForBadIdentityRecords(selectedContacts.toSet(), identityChangesSince).andThen(
       repository.send(
         store.state.selectedMedia,
         store.state.editorStateMap,
@@ -335,7 +335,13 @@ class MediaSelectionViewModel(
       return
     }
 
-    repository.uploadRepository.startUpload(media, store.state.recipient)
+    val filteredPreUploadMedia = if (Stories.isFeatureEnabled()) {
+      media.filter { Stories.MediaTransform.canPreUploadMedia(it) }
+    } else {
+      media
+    }
+
+    repository.uploadRepository.startUpload(filteredPreUploadMedia, store.state.recipient)
   }
 
   private fun cancelUpload(media: Media) {

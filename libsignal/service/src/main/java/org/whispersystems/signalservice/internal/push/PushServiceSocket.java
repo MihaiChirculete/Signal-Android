@@ -22,6 +22,7 @@ import org.signal.libsignal.protocol.state.SignedPreKeyRecord;
 import org.signal.libsignal.protocol.util.Pair;
 import org.signal.libsignal.zkgroup.VerificationFailedException;
 import org.signal.libsignal.zkgroup.profiles.ClientZkProfileOperations;
+import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential;
 import org.signal.libsignal.zkgroup.profiles.ProfileKey;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredential;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequest;
@@ -52,6 +53,7 @@ import org.whispersystems.signalservice.api.payments.CurrencyConversions;
 import org.whispersystems.signalservice.api.profiles.ProfileAndCredential;
 import org.whispersystems.signalservice.api.profiles.SignalServiceProfile;
 import org.whispersystems.signalservice.api.profiles.SignalServiceProfileWrite;
+import org.whispersystems.signalservice.api.push.ACI;
 import org.whispersystems.signalservice.api.push.ServiceId;
 import org.whispersystems.signalservice.api.push.ServiceIdType;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
@@ -78,6 +80,8 @@ import org.whispersystems.signalservice.api.push.exceptions.RemoteAttestationRes
 import org.whispersystems.signalservice.api.push.exceptions.ResumeLocationInvalidException;
 import org.whispersystems.signalservice.api.push.exceptions.ServerRejectedException;
 import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
+import org.whispersystems.signalservice.api.push.exceptions.UsernameIsNotAssociatedWithAnAccountException;
+import org.whispersystems.signalservice.api.push.exceptions.UsernameIsNotReservedException;
 import org.whispersystems.signalservice.api.push.exceptions.UsernameMalformedException;
 import org.whispersystems.signalservice.api.push.exceptions.UsernameTakenException;
 import org.whispersystems.signalservice.api.storage.StorageAuthResponse;
@@ -87,6 +91,7 @@ import org.whispersystems.signalservice.api.subscriptions.SubscriptionLevels;
 import org.whispersystems.signalservice.api.util.CredentialsProvider;
 import org.whispersystems.signalservice.api.util.Tls12SocketFactory;
 import org.whispersystems.signalservice.api.util.TlsProxySocketFactory;
+import org.whispersystems.signalservice.internal.ServiceResponse;
 import org.whispersystems.signalservice.internal.configuration.SignalCdnUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalProxy;
 import org.whispersystems.signalservice.internal.configuration.SignalServiceConfiguration;
@@ -124,6 +129,7 @@ import org.whispersystems.signalservice.internal.util.Util;
 import org.whispersystems.signalservice.internal.util.concurrent.FutureTransformers;
 import org.whispersystems.signalservice.internal.util.concurrent.ListenableFuture;
 import org.whispersystems.signalservice.internal.util.concurrent.SettableFuture;
+import org.whispersystems.signalservice.internal.websocket.ResponseMapper;
 import org.whispersystems.util.Base64;
 import org.whispersystems.util.Base64UrlSafe;
 
@@ -136,6 +142,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -152,10 +160,15 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
+import io.reactivex.rxjava3.annotations.NonNull;
+import io.reactivex.rxjava3.core.Single;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.ConnectionPool;
@@ -189,8 +202,10 @@ public class PushServiceSocket {
   private static final String REGISTRATION_LOCK_PATH     = "/v1/accounts/registration_lock";
   private static final String REQUEST_PUSH_CHALLENGE     = "/v1/accounts/fcm/preauth/%s/%s";
   private static final String WHO_AM_I                   = "/v1/accounts/whoami";
-  private static final String SET_USERNAME_PATH          = "/v1/accounts/username/%s";
-  private static final String DELETE_USERNAME_PATH       = "/v1/accounts/username";
+  private static final String GET_USERNAME_PATH          = "/v1/accounts/username/%s";
+  private static final String MODIFY_USERNAME_PATH       = "/v1/accounts/username";
+  private static final String RESERVE_USERNAME_PATH      = "/v1/accounts/username/reserved";
+  private static final String CONFIRM_USERNAME_PATH      = "/v1/accounts/username/confirm";
   private static final String DELETE_ACCOUNT_PATH        = "/v1/accounts/me";
   private static final String CHANGE_NUMBER_PATH         = "/v1/accounts/number";
   private static final String IDENTIFIER_REGISTERED_PATH = "/v1/accounts/account/%s";
@@ -206,7 +221,7 @@ public class PushServiceSocket {
 
   private static final String DIRECTORY_AUTH_PATH       = "/v1/directory/auth";
   private static final String MESSAGE_PATH              = "/v1/messages/%s";
-  private static final String GROUP_MESSAGE_PATH        = "/v1/messages/multi_recipient?ts=%s&online=%s";
+  private static final String GROUP_MESSAGE_PATH        = "/v1/messages/multi_recipient?ts=%s&online=%s&urgent=%s";
   private static final String SENDER_ACK_MESSAGE_PATH   = "/v1/messages/%s/%d";
   private static final String UUID_ACK_MESSAGE_PATH     = "/v1/messages/uuid/%s";
   private static final String ATTACHMENT_V2_PATH        = "/v2/attachments/form/upload";
@@ -215,7 +230,7 @@ public class PushServiceSocket {
   private static final String PAYMENTS_AUTH_PATH        = "/v1/payments/auth";
 
   private static final String PROFILE_PATH              = "/v1/profile/%s";
-  private static final String PROFILE_USERNAME_PATH     = "/v1/profile/username/%s";
+  private static final String PROFILE_BATCH_CHECK_PATH  = "/v1/profile/identity_check/batch";
 
   private static final String SENDER_CERTIFICATE_PATH         = "/v1/certificate/delivery";
   private static final String SENDER_CERTIFICATE_NO_E164_PATH = "/v1/certificate/delivery?includeE164=false";
@@ -230,7 +245,7 @@ public class PushServiceSocket {
   private static final String STICKER_MANIFEST_PATH          = "stickers/%s/manifest.proto";
   private static final String STICKER_PATH                   = "stickers/%s/full/%d";
 
-  private static final String GROUPSV2_CREDENTIAL       = "/v1/certificate/group/%d/%d?identity=%s";
+  private static final String GROUPSV2_CREDENTIAL       = "/v1/certificate/auth/group?redemptionStartSeconds=%d&redemptionEndSeconds=%d";
   private static final String GROUPSV2_GROUP            = "/v1/groups/";
   private static final String GROUPSV2_GROUP_PASSWORD   = "/v1/groups/?inviteLinkPassword=%s";
   private static final String GROUPSV2_GROUP_CHANGES    = "/v1/groups/logs/%s?maxSupportedChangeEpoch=%d&includeFirstState=%s&includeLastState=false";
@@ -347,26 +362,31 @@ public class PushServiceSocket {
     return JsonUtil.fromJsonResponse(body, CdsiAuthResponse.class);
   }
 
-  public VerifyAccountResponse verifyAccountCode(String verificationCode, String signalingKey, int registrationId, boolean fetchesMessages,
-                                                 String pin, String registrationLock,
-                                                 byte[] unidentifiedAccessKey, boolean unrestrictedUnidentifiedAccess,
+  public VerifyAccountResponse verifyAccountCode(String verificationCode,
+                                                 String signalingKey,
+                                                 int registrationId,
+                                                 boolean fetchesMessages,
+                                                 String pin,
+                                                 String registrationLock,
+                                                 byte[] unidentifiedAccessKey,
+                                                 boolean unrestrictedUnidentifiedAccess,
                                                  AccountAttributes.Capabilities capabilities,
-                                                 boolean discoverableByPhoneNumber)
+                                                 boolean discoverableByPhoneNumber,
+                                                 int pniRegistrationId)
       throws IOException
   {
-    AccountAttributes signalingKeyEntity = new AccountAttributes(signalingKey, registrationId, fetchesMessages, pin, registrationLock, unidentifiedAccessKey, unrestrictedUnidentifiedAccess, capabilities, discoverableByPhoneNumber, null);
+    AccountAttributes signalingKeyEntity = new AccountAttributes(signalingKey, registrationId, fetchesMessages, pin, registrationLock, unidentifiedAccessKey, unrestrictedUnidentifiedAccess, capabilities, discoverableByPhoneNumber, null, pniRegistrationId);
     String            requestBody        = JsonUtil.toJson(signalingKeyEntity);
     String            responseBody       = makeServiceRequest(String.format(VERIFY_ACCOUNT_CODE_PATH, verificationCode), "PUT", requestBody);
 
     return JsonUtil.fromJson(responseBody, VerifyAccountResponse.class);
   }
 
-  public VerifyAccountResponse changeNumber(String code, String e164NewNumber, String registrationLock)
+  public VerifyAccountResponse changeNumber(@Nonnull ChangePhoneNumberRequest changePhoneNumberRequest)
       throws IOException
   {
-    ChangePhoneNumberRequest changePhoneNumberRequest = new ChangePhoneNumberRequest(e164NewNumber, code, registrationLock);
-    String                   requestBody              = JsonUtil.toJson(changePhoneNumberRequest);
-    String                   responseBody             = makeServiceRequest(CHANGE_NUMBER_PATH, "PUT", requestBody);
+    String requestBody  = JsonUtil.toJson(changePhoneNumberRequest);
+    String responseBody = makeServiceRequest(CHANGE_NUMBER_PATH, "PUT", requestBody);
 
     return JsonUtil.fromJson(responseBody, VerifyAccountResponse.class);
   }
@@ -380,7 +400,8 @@ public class PushServiceSocket {
                                    boolean unrestrictedUnidentifiedAccess,
                                    AccountAttributes.Capabilities capabilities,
                                    boolean discoverableByPhoneNumber,
-                                   byte[] encryptedDeviceName)
+                                   byte[] encryptedDeviceName,
+                                   int pniRegistrationId)
       throws IOException
   {
     if (registrationLock != null && pin != null) {
@@ -389,9 +410,18 @@ public class PushServiceSocket {
 
     String name = (encryptedDeviceName == null) ? null :  Base64.encodeBytes(encryptedDeviceName);
 
-    AccountAttributes accountAttributes = new AccountAttributes(signalingKey, registrationId, fetchesMessages, pin, registrationLock,
-                                                                unidentifiedAccessKey, unrestrictedUnidentifiedAccess, capabilities,
-                                                                discoverableByPhoneNumber, name);
+    AccountAttributes accountAttributes = new AccountAttributes(signalingKey,
+                                                                registrationId,
+                                                                fetchesMessages,
+                                                                pin,
+                                                                registrationLock,
+                                                                unidentifiedAccessKey,
+                                                                unrestrictedUnidentifiedAccess,
+                                                                capabilities,
+                                                                discoverableByPhoneNumber,
+                                                                name,
+                                                                pniRegistrationId);
+
     makeServiceRequest(SET_ACCOUNT_ATTRIBUTES, "PUT", JsonUtil.toJson(accountAttributes));
   }
 
@@ -456,12 +486,12 @@ public class PushServiceSocket {
     return JsonUtil.fromJson(responseText, SenderCertificate.class).getCertificate();
   }
 
-  public SendGroupMessageResponse sendGroupMessage(byte[] body, byte[] joinedUnidentifiedAccess, long timestamp, boolean online)
+  public SendGroupMessageResponse sendGroupMessage(byte[] body, byte[] joinedUnidentifiedAccess, long timestamp, boolean online, boolean urgent)
       throws IOException
   {
     ServiceConnectionHolder connectionHolder = (ServiceConnectionHolder) getRandom(serviceClients, random);
 
-    String path = String.format(Locale.US, GROUP_MESSAGE_PATH, timestamp, online);
+    String path = String.format(Locale.US, GROUP_MESSAGE_PATH, timestamp, online, urgent);
 
     Request.Builder requestBuilder = new Request.Builder();
     requestBuilder.url(String.format("%s%s", connectionHolder.getUrl(), path));
@@ -748,19 +778,6 @@ public class PushServiceSocket {
     });
   }
 
-  public SignalServiceProfile retrieveProfileByUsername(String username, Optional<UnidentifiedAccess> unidentifiedAccess, Locale locale)
-      throws NonSuccessfulResponseCodeException, PushNetworkException, MalformedResponseException
-  {
-    String response = makeServiceRequest(String.format(PROFILE_USERNAME_PATH, username), "GET", null, AcceptLanguagesUtil.getHeadersWithAcceptLanguage(locale), unidentifiedAccess);
-
-    try {
-      return JsonUtil.fromJson(response, SignalServiceProfile.class);
-    } catch (IOException e) {
-      Log.w(TAG, e);
-      throw new MalformedResponseException("Unable to parse entity", e);
-    }
-  }
-
   public ListenableFuture<ProfileAndCredential> retrieveVersionedProfileAndCredential(UUID target, ProfileKey profileKey, Optional<UnidentifiedAccess> unidentifiedAccess, Locale locale) {
     ProfileKeyVersion                  profileKeyIdentifier = profileKey.getProfileKeyVersion(target);
     ProfileKeyCredentialRequestContext requestContext       = clientZkProfileOperations.createProfileKeyCredentialRequestContext(random, target, profileKey);
@@ -768,7 +785,7 @@ public class PushServiceSocket {
 
     String version           = profileKeyIdentifier.serialize();
     String credentialRequest = Hex.toStringCondensed(request.serialize());
-    String subPath           = String.format("%s/%s/%s", target, version, credentialRequest);
+    String subPath           = String.format("%s/%s/%s?credentialType=expiringProfileKey", target, version, credentialRequest);
 
 
     ListenableFuture<String> response = submitServiceRequest(String.format(PROFILE_PATH, subPath), "GET", null, AcceptLanguagesUtil.getHeadersWithAcceptLanguage(locale), unidentifiedAccess);
@@ -783,10 +800,10 @@ public class PushServiceSocket {
       SignalServiceProfile signalServiceProfile = JsonUtil.fromJson(body, SignalServiceProfile.class);
 
       try {
-        ProfileKeyCredential profileKeyCredential = signalServiceProfile.getProfileKeyCredentialResponse() != null
-                                                      ? clientZkProfileOperations.receiveProfileKeyCredential(requestContext, signalServiceProfile.getProfileKeyCredentialResponse())
-                                                      : null;
-        return new ProfileAndCredential(signalServiceProfile, SignalServiceProfile.RequestType.PROFILE_AND_CREDENTIAL, Optional.ofNullable(profileKeyCredential));
+        ExpiringProfileKeyCredential expiringProfileKeyCredential = signalServiceProfile.getExpiringProfileKeyCredentialResponse() != null
+                                                                    ? clientZkProfileOperations.receiveExpiringProfileKeyCredential(requestContext, signalServiceProfile.getExpiringProfileKeyCredentialResponse())
+                                                                    : null;
+        return new ProfileAndCredential(signalServiceProfile, SignalServiceProfile.RequestType.PROFILE_AND_CREDENTIAL, Optional.ofNullable(expiringProfileKeyCredential));
       } catch (VerificationFailedException e) {
         Log.w(TAG, "Failed to verify credential.", e);
         return new ProfileAndCredential(signalServiceProfile, SignalServiceProfile.RequestType.PROFILE_AND_CREDENTIAL, Optional.empty());
@@ -861,17 +878,118 @@ public class PushServiceSocket {
     return Optional.empty();
   }
 
-  public void setUsername(String username) throws IOException {
-    makeServiceRequest(String.format(SET_USERNAME_PATH, username), "PUT", "", NO_HEADERS, (responseCode, body) -> {
+  public Single<ServiceResponse<IdentityCheckResponse>> performIdentityCheck(@Nonnull IdentityCheckRequest request,
+                                                                             @Nonnull Optional<UnidentifiedAccess> unidentifiedAccess,
+                                                                             @Nonnull ResponseMapper<IdentityCheckResponse> responseMapper)
+  {
+    Single<ServiceResponse<IdentityCheckResponse>> requestSingle = Single.fromCallable(() -> {
+      Response response = getServiceConnection(PROFILE_BATCH_CHECK_PATH, "POST", jsonRequestBody(JsonUtil.toJson(request)), Collections.emptyMap(), unidentifiedAccess, false);
+      String body = response.body() != null ? response.body().string() : "";
+      return responseMapper.map(response.code(), body, response::header, unidentifiedAccess.isPresent());
+    });
+
+    return requestSingle
+        .subscribeOn(Schedulers.io())
+        .observeOn(Schedulers.io())
+        .onErrorReturn(ServiceResponse::forUnknownError);
+  }
+
+  /**
+   * Gets the ACI for the given username, if it exists. This is an unauthenticated request.
+   *
+   * This network request can have the following error responses:
+   * <ul>
+   *   <li>404 - The username given is not associated with an account</li>
+   *   <li>428 - Rate-limited, retry is available in the Retry-After header</li>
+   *   <li>400 - Bad Request. The request included authentication.</li>
+   * </ul>
+   *
+   * @param username The username to look up.
+   * @return The ACI for the given username if it exists.
+   * @throws IOException if a network exception occurs.
+   */
+  public @NonNull ACI getAciByUsername(String username) throws IOException {
+    String response = makeServiceRequestWithoutAuthentication(
+        String.format(GET_USERNAME_PATH, URLEncoder.encode(username, StandardCharsets.UTF_8.toString())),
+        "GET",
+        null,
+        (responseCode, body) -> {
+          if (responseCode == 404) {
+            throw new UsernameIsNotAssociatedWithAnAccountException();
+          }
+        }
+    );
+
+    GetAciByUsernameResponse getAciByUsernameResponse = JsonUtil.fromJsonResponse(response, GetAciByUsernameResponse.class);
+    return ACI.from(UUID.fromString(getAciByUsernameResponse.getUuid()));
+  }
+
+  /**
+   * Set the username for the account without seeing the discriminator first.
+   *
+   * @param nickname          The user-supplied nickname, which must meet the requirements for usernames.
+   * @param existingUsername  (Optional) If the account has a current username, indicates what the client thinks the current username is. Allows the server to
+   *                          deduplicate repeated requests.
+   * @return                  The username as set by the server, which includes both the nickname and discriminator.
+   * @throws IOException      Thrown when the username is invalid or taken, or when another network error occurs.
+   */
+  public @NonNull String setUsername(@NonNull String nickname, @Nullable String existingUsername) throws IOException {
+    SetUsernameRequest setUsernameRequest = new SetUsernameRequest(nickname, existingUsername);
+
+    String responseString = makeServiceRequest(MODIFY_USERNAME_PATH, "PUT", JsonUtil.toJson(setUsernameRequest), NO_HEADERS, (responseCode, body) -> {
       switch (responseCode) {
-        case 400: throw new UsernameMalformedException();
+        case 422: throw new UsernameMalformedException();
         case 409: throw new UsernameTakenException();
+      }
+    }, Optional.empty());
+
+    SetUsernameResponse response = JsonUtil.fromJsonResponse(responseString, SetUsernameResponse.class);
+    return response.getUsername();
+  }
+
+  /**
+   * Reserve a username for the account. This replaces an existing reservation if one exists. The username is guaranteed to be available for 5 minutes and can
+   * be confirmed with confirmUsername.
+   *
+   * @param nickname          The user-supplied nickname, which must meet the requirements for usernames.
+   * @return                  The reserved username. It is available for confirmation for 5 minutes.
+   * @throws IOException      Thrown when the username is invalid or taken, or when another network error occurs.
+   */
+  public @NonNull ReserveUsernameResponse reserveUsername(@NonNull String nickname) throws IOException {
+    ReserveUsernameRequest reserveUsernameRequest = new ReserveUsernameRequest(nickname);
+
+    String responseString = makeServiceRequest(RESERVE_USERNAME_PATH, "PUT", JsonUtil.toJson(reserveUsernameRequest), NO_HEADERS, (responseCode, body) -> {
+      switch (responseCode) {
+        case 422: throw new UsernameMalformedException();
+        case 409: throw new UsernameTakenException();
+      }
+    }, Optional.empty());
+
+    return JsonUtil.fromJsonResponse(responseString, ReserveUsernameResponse.class);
+  }
+
+  /**
+   * Set a previously reserved username for the account.
+   *
+   * @param reserveUsernameResponse The response object from the reservation
+   * @throws IOException                Thrown when the username is invalid or taken, or when another network error occurs.
+   */
+  public void confirmUsername(ReserveUsernameResponse reserveUsernameResponse) throws IOException {
+    ConfirmUsernameRequest confirmUsernameRequest = new ConfirmUsernameRequest(reserveUsernameResponse.getUsername(), reserveUsernameResponse.getReservationToken());
+
+    makeServiceRequest(CONFIRM_USERNAME_PATH, "PUT", JsonUtil.toJson(confirmUsernameRequest), NO_HEADERS, (responseCode, body) -> {
+      switch (responseCode) {
+        case 409: throw new UsernameIsNotReservedException();
+        case 410: throw new UsernameTakenException();
       }
     }, Optional.empty());
   }
 
+  /**
+   * Remove the username associated with the account.
+   */
   public void deleteUsername() throws IOException {
-    makeServiceRequest(DELETE_USERNAME_PATH, "DELETE", null);
+    makeServiceRequest(MODIFY_USERNAME_PATH, "DELETE", null);
   }
 
   public void deleteAccount() throws IOException {
@@ -1427,17 +1545,11 @@ public class PushServiceSocket {
       connections.add(call);
     }
 
-    try {
-      Response response;
-
-      try {
-        response = call.execute();
-      } catch (IOException e) {
-        throw new PushNetworkException(e);
-      }
-
+    try (Response response = call.execute()) {
       if (response.isSuccessful()) return file.getTransmittedDigest();
       else                         throw new NonSuccessfulResponseCodeException(response.code(), "Response: " + response);
+    } catch (IOException e) {
+      throw new PushNetworkException(e);
     } finally {
       synchronized (connections) {
         connections.remove(call);
@@ -2317,15 +2429,15 @@ public class PushServiceSocket {
 
   public enum ClientSet { ContactDiscovery, KeyBackup }
 
-  public CredentialResponse retrieveGroupsV2Credentials(int today, boolean isAci)
+  public CredentialResponse retrieveGroupsV2Credentials(long todaySeconds)
       throws IOException
   {
-    int    todayPlus7 = today + 7;
-    String response   = makeServiceRequest(String.format(Locale.US, GROUPSV2_CREDENTIAL, today, todayPlus7, isAci ? "aci" : "pni"),
-                                           "GET",
-                                           null,
-                                           NO_HEADERS,
-                                           Optional.empty());
+    long todayPlus7 = todaySeconds + TimeUnit.DAYS.toSeconds(7);
+    String response = makeServiceRequest(String.format(Locale.US, GROUPSV2_CREDENTIAL, todaySeconds, todayPlus7),
+                                         "GET",
+                                         null,
+                                         NO_HEADERS,
+                                         Optional.empty());
 
     return JsonUtil.fromJson(response, CredentialResponse.class);
   }

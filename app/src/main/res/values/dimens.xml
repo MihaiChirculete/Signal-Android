@@ -31,6 +31,8 @@
     <dimen name="album_5_cell_size_small">69dp</dimen>
 
     <dimen name="camera_contacts_horizontal_margin">16dp</dimen>
+    <dimen name="camera_capture_button_size">124dp</dimen>
+    <dimen name="camera_capture_image_button_size">76dp</dimen>
 
     <dimen name="message_corner_radius">18dp</dimen>
     <dimen name="message_corner_collapse_radius">4dp</dimen>
@@ -199,6 +201,9 @@
     <dimen name="dsl_settings_gutter">16dp</dimen>
     <dimen name="media_overview_toggle_gutter">2dp</dimen>
     <dimen name="wallpaper_selection_gutter">8dp</dimen>
+    <dimen name="safety_number_recipient_row_item_gutter">4dp</dimen>
+    <dimen name="selectable_list_item_margin">8dp</dimen>
+    <dimen name="selectable_list_item_padding">8dp</dimen>
 
     <dimen name="chat_colors_preview_bubble_max_width">240dp</dimen>
 

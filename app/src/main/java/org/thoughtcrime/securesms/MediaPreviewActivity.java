@@ -44,12 +44,14 @@ import androidx.core.view.ViewCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentStatePagerAdapter;
-import androidx.lifecycle.ViewModelProviders;
+import androidx.lifecycle.ViewModelProvider;
 import androidx.loader.app.LoaderManager;
 import androidx.loader.content.Loader;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager.widget.ViewPager;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import org.signal.core.util.logging.Log;
 import org.thoughtcrime.securesms.animation.DepthPageTransformer;
@@ -166,7 +168,7 @@ public final class MediaPreviewActivity extends PassphraseRequiredActivity
     setSupportActionBar(findViewById(R.id.toolbar));
 
     voiceNoteMediaController = new VoiceNoteMediaController(this);
-    viewModel = ViewModelProviders.of(this).get(MediaPreviewViewModel.class);
+    viewModel = new ViewModelProvider(this).get(MediaPreviewViewModel.class);
 
     fullscreenHelper = new FullscreenHelper(this);
 
@@ -397,6 +399,7 @@ public final class MediaPreviewActivity extends PassphraseRequiredActivity
     if (mediaItem != null) {
       MultiselectForwardFragmentArgs.create(
           this,
+          threadId,
           mediaItem.uri,
           mediaItem.type,
           args -> MultiselectForwardFragment.showBottomSheet(getSupportFragmentManager(), args)
@@ -463,7 +466,7 @@ public final class MediaPreviewActivity extends PassphraseRequiredActivity
       return;
     }
 
-    AlertDialog.Builder builder = new AlertDialog.Builder(this);
+    AlertDialog.Builder builder = new MaterialAlertDialogBuilder(this);
     builder.setIcon(R.drawable.ic_warning);
     builder.setTitle(R.string.MediaPreviewActivity_media_delete_confirmation_title);
     builder.setMessage(R.string.MediaPreviewActivity_media_delete_confirmation_message);

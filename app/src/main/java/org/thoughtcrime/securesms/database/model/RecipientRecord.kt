@@ -2,7 +2,7 @@ package org.thoughtcrime.securesms.database.model
 
 import android.net.Uri
 import org.signal.libsignal.zkgroup.groups.GroupMasterKey
-import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredential
+import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential
 import org.thoughtcrime.securesms.badges.models.Badge
 import org.thoughtcrime.securesms.conversation.colors.AvatarColor
 import org.thoughtcrime.securesms.conversation.colors.ChatColors
@@ -45,7 +45,7 @@ data class RecipientRecord(
   val expireMessages: Int,
   val registered: RegisteredState,
   val profileKey: ByteArray?,
-  val profileKeyCredential: ProfileKeyCredential?,
+  val expiringProfileKeyCredential: ExpiringProfileKeyCredential?,
   val systemProfileName: ProfileName,
   val systemDisplayName: String?,
   val systemContactPhotoUri: String?,
@@ -55,8 +55,7 @@ data class RecipientRecord(
   val signalProfileName: ProfileName,
   @get:JvmName("getProfileAvatar")
   val signalProfileAvatar: String?,
-  @get:JvmName("hasProfileImage")
-  val hasProfileImage: Boolean,
+  val profileAvatarFileDetails: ProfileAvatarFileDetails,
   @get:JvmName("isProfileSharing")
   val profileSharing: Boolean,
   val lastProfileFetch: Long,
@@ -71,6 +70,7 @@ data class RecipientRecord(
   val changeNumberCapability: Recipient.Capability,
   val storiesCapability: Recipient.Capability,
   val giftBadgesCapability: Recipient.Capability,
+  val pnpCapability: Recipient.Capability,
   val insightsBannerTier: InsightsBannerTier,
   val storageId: ByteArray?,
   val mentionSetting: MentionSetting,
@@ -83,7 +83,9 @@ data class RecipientRecord(
   val extras: Recipient.Extras?,
   @get:JvmName("hasGroupsInCommon")
   val hasGroupsInCommon: Boolean,
-  val badges: List<Badge>
+  val badges: List<Badge>,
+  @get:JvmName("needsPniSignature")
+  val needsPniSignature: Boolean
 ) {
 
   fun getDefaultSubscriptionId(): Optional<Int> {
