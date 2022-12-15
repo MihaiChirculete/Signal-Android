@@ -28,14 +28,15 @@ import org.thoughtcrime.securesms.contacts.avatars.TransparentContactPhoto;
 import org.thoughtcrime.securesms.conversation.colors.AvatarColor;
 import org.thoughtcrime.securesms.conversation.colors.ChatColors;
 import org.thoughtcrime.securesms.conversation.colors.ChatColorsPalette;
-import org.thoughtcrime.securesms.database.RecipientDatabase;
-import org.thoughtcrime.securesms.database.RecipientDatabase.MentionSetting;
-import org.thoughtcrime.securesms.database.RecipientDatabase.RegisteredState;
-import org.thoughtcrime.securesms.database.RecipientDatabase.UnidentifiedAccessMode;
-import org.thoughtcrime.securesms.database.RecipientDatabase.VibrateState;
+import org.thoughtcrime.securesms.database.RecipientTable;
+import org.thoughtcrime.securesms.database.RecipientTable.MentionSetting;
+import org.thoughtcrime.securesms.database.RecipientTable.RegisteredState;
+import org.thoughtcrime.securesms.database.RecipientTable.UnidentifiedAccessMode;
+import org.thoughtcrime.securesms.database.RecipientTable.VibrateState;
 import org.thoughtcrime.securesms.database.SignalDatabase;
 import org.thoughtcrime.securesms.database.model.DistributionListId;
 import org.thoughtcrime.securesms.database.model.ProfileAvatarFileDetails;
+import org.thoughtcrime.securesms.database.model.RecipientRecord;
 import org.thoughtcrime.securesms.database.model.databaseprotos.RecipientExtras;
 import org.thoughtcrime.securesms.dependencies.ApplicationDependencies;
 import org.thoughtcrime.securesms.groups.GroupId;
@@ -70,7 +71,7 @@ import java.util.stream.Collectors;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 
-import static org.thoughtcrime.securesms.database.RecipientDatabase.InsightsBannerTier;
+import static org.thoughtcrime.securesms.database.RecipientTable.InsightsBannerTier;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class Recipient {
@@ -118,13 +119,7 @@ public class Recipient {
   private final String                       notificationChannel;
   private final UnidentifiedAccessMode       unidentifiedAccessMode;
   private final boolean                      forceSmsSelection;
-  private final Capability                   groupsV1MigrationCapability;
-  private final Capability                   senderKeyCapability;
-  private final Capability                   announcementGroupCapability;
-  private final Capability                   changeNumberCapability;
-  private final Capability                   storiesCapability;
-  private final Capability                   giftBadgesCapability;
-  private final Capability                   pnpCapability;
+  private final RecipientRecord.Capabilities capabilities;
   private final InsightsBannerTier           insightsBannerTier;
   private final byte[]                       storageId;
   private final MentionSetting               mentionSetting;
@@ -235,7 +230,7 @@ public class Recipient {
       throw new AssertionError("Unknown serviceId!");
     }
 
-    RecipientDatabase db = SignalDatabase.recipients();
+    RecipientTable db = SignalDatabase.recipients();
 
     RecipientId recipientId;
 
@@ -274,8 +269,8 @@ public class Recipient {
       throw new AssertionError();
     }
 
-    RecipientDatabase db          = SignalDatabase.recipients();
-    RecipientId       recipientId = db.getAndPossiblyMerge(serviceId, e164);
+    RecipientTable db          = SignalDatabase.recipients();
+    RecipientId    recipientId = db.getAndPossiblyMerge(serviceId, e164);
 
     Recipient resolved = resolved(recipientId);
 
@@ -302,8 +297,8 @@ public class Recipient {
    */
   @WorkerThread
   public static @NonNull Recipient externalContact(@NonNull String identifier) {
-    RecipientDatabase db = SignalDatabase.recipients();
-    RecipientId       id = null;
+    RecipientTable db = SignalDatabase.recipients();
+    RecipientId    id = null;
 
     if (UuidUtil.isUuid(identifier)) {
       throw new AssertionError("UUIDs are not valid system contact identifiers!");
@@ -358,8 +353,8 @@ public class Recipient {
   public static @NonNull Recipient external(@NonNull Context context, @NonNull String identifier) {
     Preconditions.checkNotNull(identifier, "Identifier cannot be null!");
 
-    RecipientDatabase db = SignalDatabase.recipients();
-    RecipientId       id = null;
+    RecipientTable db = SignalDatabase.recipients();
+    RecipientId    id = null;
 
     if (UuidUtil.isUuid(identifier)) {
       ServiceId serviceId = ServiceId.parseOrThrow(identifier);
@@ -421,13 +416,7 @@ public class Recipient {
     this.notificationChannel          = null;
     this.unidentifiedAccessMode       = UnidentifiedAccessMode.DISABLED;
     this.forceSmsSelection            = false;
-    this.groupsV1MigrationCapability  = Capability.UNKNOWN;
-    this.senderKeyCapability          = Capability.UNKNOWN;
-    this.announcementGroupCapability  = Capability.UNKNOWN;
-    this.changeNumberCapability       = Capability.UNKNOWN;
-    this.storiesCapability            = Capability.UNKNOWN;
-    this.giftBadgesCapability         = Capability.UNKNOWN;
-    this.pnpCapability                = Capability.UNKNOWN;
+    this.capabilities                 = RecipientRecord.Capabilities.UNKNOWN;
     this.storageId                    = null;
     this.mentionSetting               = MentionSetting.ALWAYS_NOTIFY;
     this.wallpaper                    = null;
@@ -481,13 +470,7 @@ public class Recipient {
     this.notificationChannel          = details.notificationChannel;
     this.unidentifiedAccessMode       = details.unidentifiedAccessMode;
     this.forceSmsSelection            = details.forceSmsSelection;
-    this.groupsV1MigrationCapability  = details.groupsV1MigrationCapability;
-    this.senderKeyCapability          = details.senderKeyCapability;
-    this.announcementGroupCapability  = details.announcementGroupCapability;
-    this.changeNumberCapability       = details.changeNumberCapability;
-    this.storiesCapability            = details.storiesCapability;
-    this.giftBadgesCapability         = details.giftBadgesCapability;
-    this.pnpCapability                = details.pnpCapability;
+    this.capabilities                 = details.capabilities;
     this.storageId                    = details.storageId;
     this.mentionSetting               = details.mentionSetting;
     this.wallpaper                    = details.wallpaper;
@@ -894,6 +877,10 @@ public class Recipient {
     return Stream.of(getParticipantIds()).anyMatch(p -> p.equals(selfId));
   }
 
+  public boolean isInactiveGroup() {
+    return isGroup() && !isActiveGroup();
+  }
+
   public @NonNull List<RecipientId> getParticipantIds() {
     return new ArrayList<>(participantIds);
   }
@@ -996,22 +983,25 @@ public class Recipient {
   }
 
   public @NonNull RegisteredState getRegistered() {
-    if      (isPushGroup()) return RegisteredState.REGISTERED;
-    else if (isMmsGroup())  return RegisteredState.NOT_REGISTERED;
-
-    return registered;
+    if (isPushGroup() || isDistributionList()) {
+      return RegisteredState.REGISTERED;
+    } else if (isMmsGroup()) {
+      return RegisteredState.NOT_REGISTERED;
+    } else {
+      return registered;
+    }
   }
 
   public boolean isRegistered() {
-    return registered == RegisteredState.REGISTERED || isPushGroup();
+    return getRegistered() == RegisteredState.REGISTERED;
   }
 
   public boolean isMaybeRegistered() {
-    return registered != RegisteredState.NOT_REGISTERED || isPushGroup();
+    return getRegistered() != RegisteredState.NOT_REGISTERED;
   }
 
   public boolean isUnregistered() {
-    return registered == RegisteredState.NOT_REGISTERED && !isPushGroup();
+    return getRegistered() == RegisteredState.NOT_REGISTERED;
   }
 
   public @Nullable String getNotificationChannel() {
@@ -1022,39 +1012,16 @@ public class Recipient {
     return forceSmsSelection;
   }
 
-  public @NonNull Capability getGroupsV1MigrationCapability() {
-    return groupsV1MigrationCapability;
-  }
-
-  public @NonNull Capability getSenderKeyCapability() {
-    return senderKeyCapability;
-  }
-
-  public @NonNull Capability getAnnouncementGroupCapability() {
-    return announcementGroupCapability;
-  }
-
-  public @NonNull Capability getChangeNumberCapability() {
-    return changeNumberCapability;
-  }
-
   public @NonNull Capability getStoriesCapability() {
-    return storiesCapability;
+    return capabilities.getStoriesCapability();
   }
 
   public @NonNull Capability getGiftBadgesCapability() {
-    return giftBadgesCapability;
+    return capabilities.getGiftBadgesCapability();
   }
 
   public @NonNull Capability getPnpCapability() {
-    return pnpCapability;
-  }
-
-  /**
-   * True if this recipient supports the message retry system, or false if we should use the legacy session reset system.
-   */
-  public boolean supportsMessageRetries() {
-    return getSenderKeyCapability() == Capability.SUPPORTED;
+    return capabilities.getPnpCapability();
   }
 
   public @Nullable byte[] getProfileKey() {
@@ -1138,7 +1105,7 @@ public class Recipient {
   }
 
   public @NonNull List<Badge> getBadges() {
-    return FeatureFlags.displayDonorBadges() || isSelf() ? badges : Collections.emptyList();
+    return badges;
   }
 
   public @Nullable Badge getFeaturedBadge() {
@@ -1336,7 +1303,6 @@ public class Recipient {
            Objects.equals(profileAvatar, other.profileAvatar) &&
            Objects.equals(notificationChannel, other.notificationChannel) &&
            unidentifiedAccessMode == other.unidentifiedAccessMode &&
-           groupsV1MigrationCapability == other.groupsV1MigrationCapability &&
            insightsBannerTier == other.insightsBannerTier &&
            Arrays.equals(storageId, other.storageId) &&
            mentionSetting == other.mentionSetting &&
@@ -1387,7 +1353,7 @@ public class Recipient {
     }
 
     public @NonNull FallbackContactPhoto getPhotoForDistributionList() {
-      return new ResourceContactPhoto(R.drawable.ic_lock_24, R.drawable.ic_lock_24, R.drawable.ic_lock_40);
+      return new ResourceContactPhoto(R.drawable.ic_stories_24, R.drawable.ic_stories_24, R.drawable.ic_stories_24);
     }
   }
 

@@ -763,8 +763,10 @@ public final class SignalServiceContent {
 
       if (!address.isPresent()                                                        &&
           !dataMessage.flatMap(SignalServiceDataMessage::getGroupContext).isPresent() &&
-          !storyMessage.flatMap(SignalServiceStoryMessage::getGroupContext).isPresent()) {
-        throw new InvalidMessageStructureException("SyncMessage missing both destination and group ID!");
+          !storyMessage.flatMap(SignalServiceStoryMessage::getGroupContext).isPresent() &&
+          recipientManifest.isEmpty())
+      {
+        throw new InvalidMessageStructureException("SyncMessage missing destination, group ID, and recipient manifest!");
       }
 
       for (SignalServiceProtos.SyncMessage.Sent.UnidentifiedDeliveryStatus status : sentContent.getUnidentifiedStatusList()) {
@@ -1240,8 +1242,12 @@ public final class SignalServiceContent {
     SignalServiceProtos.DataMessage.Payment payment = content.getPayment();
 
     switch (payment.getItemCase()) {
-      case NOTIFICATION: return new SignalServiceDataMessage.Payment(createPaymentNotification(payment));
-      default          : throw new InvalidMessageStructureException("Unknown payment item");
+      case NOTIFICATION:
+        return new SignalServiceDataMessage.Payment(createPaymentNotification(payment), null);
+      case ACTIVATION:
+        return new SignalServiceDataMessage.Payment(null, createPaymentActivation(payment));
+      default:
+        throw new InvalidMessageStructureException("Unknown payment item");
     }
   }
 
@@ -1288,6 +1294,20 @@ public final class SignalServiceContent {
     SignalServiceProtos.DataMessage.Payment.Notification payment = content.getNotification();
 
     return new SignalServiceDataMessage.PaymentNotification(payment.getMobileCoin().getReceipt().toByteArray(), payment.getNote());
+  }
+
+  private static SignalServiceDataMessage.PaymentActivation createPaymentActivation(SignalServiceProtos.DataMessage.Payment content)
+      throws InvalidMessageStructureException
+  {
+    if (!content.hasActivation() ||
+        content.getItemCase() != SignalServiceProtos.DataMessage.Payment.ItemCase.ACTIVATION)
+    {
+      throw new InvalidMessageStructureException("Badly-formatted payment activation!");
+    }
+
+    SignalServiceProtos.DataMessage.Payment.Activation payment = content.getActivation();
+
+    return new SignalServiceDataMessage.PaymentActivation(payment.getType());
   }
 
   private static List<SharedContact> createSharedContacts(SignalServiceProtos.DataMessage content) throws InvalidMessageStructureException {

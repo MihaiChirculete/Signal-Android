@@ -31,6 +31,7 @@ import org.thoughtcrime.securesms.database.DatabaseObserver;
 import org.thoughtcrime.securesms.database.model.MessageId;
 import org.thoughtcrime.securesms.database.model.StoryViewState;
 import org.thoughtcrime.securesms.dependencies.ApplicationDependencies;
+import org.thoughtcrime.securesms.keyvalue.SignalStore;
 import org.thoughtcrime.securesms.mediasend.Media;
 import org.thoughtcrime.securesms.mediasend.MediaRepository;
 import org.thoughtcrime.securesms.notifications.profiles.NotificationProfile;
@@ -59,6 +60,7 @@ import io.reactivex.rxjava3.core.BackpressureStrategy;
 import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.processors.PublishProcessor;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.BehaviorSubject;
@@ -135,10 +137,12 @@ public class ConversationViewModel extends ViewModel {
         .map(Recipient::resolved)
         .subscribe(recipientCache);
 
-    conversationStateStore.update(Observable.combineLatest(recipientId.distinctUntilChanged(), conversationStateTick, (id, tick) -> id)
-                                            .switchMap(conversationRepository::getSecurityInfo)
-                                            .toFlowable(BackpressureStrategy.LATEST),
-                                  (securityInfo, state) -> state.withSecurityInfo(securityInfo));
+    Disposable disposable = conversationStateStore.update(Observable.combineLatest(recipientId.distinctUntilChanged(), conversationStateTick, (id, tick) -> id)
+                                                                    .switchMap(conversationRepository::getSecurityInfo)
+                                                                    .toFlowable(BackpressureStrategy.LATEST),
+                                                          (securityInfo, state) -> state.withSecurityInfo(securityInfo));
+
+    disposables.add(disposable);
 
     BehaviorSubject<ConversationData> conversationMetadata = BehaviorSubject.create();
 
@@ -435,7 +439,14 @@ public class ConversationViewModel extends ViewModel {
     ApplicationDependencies.getDatabaseObserver().unregisterObserver(messageUpdateObserver);
     ApplicationDependencies.getDatabaseObserver().unregisterObserver(messageInsertObserver);
     disposables.clear();
+    conversationStateStore.dispose();
     EventBus.getDefault().unregister(this);
+  }
+
+  public void insertSmsExportUpdateEvent(@NonNull Recipient recipient) {
+    if (SignalStore.misc().getSmsExportPhase().isAtLeastPhase1()) {
+      conversationRepository.insertSmsExportUpdateEvent(recipient);
+    }
   }
 
   enum Event {

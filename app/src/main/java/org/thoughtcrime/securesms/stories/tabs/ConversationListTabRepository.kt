@@ -14,13 +14,10 @@ class ConversationListTabRepository {
     private val TAG = Log.tag(ConversationListTabRepository::class.java)
   }
 
-  fun getNumberOfUnreadConversations(): Observable<Long> {
+  fun getNumberOfUnreadMessages(): Observable<Long> {
     return Observable.create<Long> {
       fun refresh() {
-        it.onNext(SignalDatabase.threads.unreadThreadCount)
-
-        val ids = SignalDatabase.threads.unreadThreadIdList
-        Log.d(TAG, "Unread threads: { $ids }")
+        it.onNext(SignalDatabase.threads.getUnreadMessageCount())
       }
 
       val listener = DatabaseObserver.Observer {

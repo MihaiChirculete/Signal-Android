@@ -13,12 +13,13 @@ import org.signal.core.util.ThreadUtil
 import org.signal.core.util.concurrent.SignalExecutors
 import org.thoughtcrime.securesms.components.settings.conversation.preferences.ButtonStripPreference
 import org.thoughtcrime.securesms.components.settings.conversation.preferences.LegacyGroupPreference
-import org.thoughtcrime.securesms.database.AttachmentDatabase
-import org.thoughtcrime.securesms.database.RecipientDatabase
+import org.thoughtcrime.securesms.database.AttachmentTable
+import org.thoughtcrime.securesms.database.RecipientTable
 import org.thoughtcrime.securesms.database.model.StoryViewState
 import org.thoughtcrime.securesms.groups.GroupId
 import org.thoughtcrime.securesms.groups.LiveGroup
 import org.thoughtcrime.securesms.groups.v2.GroupAddMembersResult
+import org.thoughtcrime.securesms.keyvalue.SignalStore
 import org.thoughtcrime.securesms.recipients.Recipient
 import org.thoughtcrime.securesms.recipients.RecipientId
 import org.thoughtcrime.securesms.recipients.RecipientUtil
@@ -69,7 +70,7 @@ sealed class ConversationSettingsViewModel(
         val ids: List<Long> = cursor.map<List<Long>> {
           val result = mutableListOf<Long>()
           while (it.moveToNext()) {
-            result.add(CursorUtil.requireLong(it, AttachmentDatabase.ROW_ID))
+            result.add(CursorUtil.requireLong(it, AttachmentTable.ROW_ID))
           }
           result
         }.orElse(listOf())
@@ -138,12 +139,18 @@ sealed class ConversationSettingsViewModel(
       }
 
       store.update(liveRecipient.liveData) { recipient, state ->
+        val isAudioAvailable = (recipient.isRegistered || SignalStore.misc().smsExportPhase.allowSmsFeatures()) &&
+          !recipient.isGroup &&
+          !recipient.isBlocked &&
+          !recipient.isSelf &&
+          !recipient.isReleaseNotes
+
         state.copy(
           recipient = recipient,
           buttonStripState = ButtonStripPreference.State(
-            isVideoAvailable = recipient.registered == RecipientDatabase.RegisteredState.REGISTERED && !recipient.isSelf && !recipient.isBlocked && !recipient.isReleaseNotes,
-            isAudioAvailable = !recipient.isGroup && !recipient.isSelf && !recipient.isBlocked && !recipient.isReleaseNotes,
-            isAudioSecure = recipient.registered == RecipientDatabase.RegisteredState.REGISTERED,
+            isVideoAvailable = recipient.registered == RecipientTable.RegisteredState.REGISTERED && !recipient.isSelf && !recipient.isBlocked && !recipient.isReleaseNotes,
+            isAudioAvailable = isAudioAvailable,
+            isAudioSecure = recipient.registered == RecipientTable.RegisteredState.REGISTERED,
             isMuted = recipient.isMuted,
             isMuteAvailable = !recipient.isSelf,
             isSearchAvailable = true
@@ -265,7 +272,8 @@ sealed class ConversationSettingsViewModel(
             isAudioSecure = recipient.isPushV2Group,
             isMuted = recipient.isMuted,
             isMuteAvailable = true,
-            isSearchAvailable = true
+            isSearchAvailable = true,
+            isAddToStoryAvailable = recipient.isPushV2Group && !recipient.isBlocked && isActive
           ),
           canModifyBlockedState = RecipientUtil.isBlockable(recipient),
           specificSettingsState = state.requireGroupSettingsState().copy(

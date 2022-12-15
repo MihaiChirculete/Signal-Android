@@ -108,9 +108,13 @@ public class ApplicationMigrations {
     static final int REFRESH_PNI_REGISTRATION_ID   = 64;
     static final int KBS_MIGRATION_2               = 65;
     static final int PNI_2                         = 66;
+    static final int SYSTEM_NAME_SYNC              = 67;
+    static final int STORY_VIEWED_STATE            = 68;
+    static final int STORY_READ_STATE              = 69;
+    static final int THREAD_MESSAGE_SCHEMA_CHANGE  = 70;
   }
 
-  public static final int CURRENT_VERSION = 66;
+  public static final int CURRENT_VERSION = 70;
 
   /**
    * This *must* be called after the {@link JobManager} has been instantiated, but *before* the call
@@ -474,6 +478,22 @@ public class ApplicationMigrations {
 
     if (lastSeenVersion < Version.PNI_2) {
       jobs.put(Version.PNI_2, new PniMigrationJob());
+    }
+
+    if (lastSeenVersion < Version.SYSTEM_NAME_SYNC) {
+      jobs.put(Version.SYSTEM_NAME_SYNC, new StorageServiceSystemNameMigrationJob());
+    }
+
+    if (lastSeenVersion < Version.STORY_VIEWED_STATE) {
+      jobs.put(Version.STORY_VIEWED_STATE, new StoryViewedReceiptsStateMigrationJob());
+    }
+
+    if (lastSeenVersion < Version.STORY_READ_STATE) {
+      jobs.put(Version.STORY_READ_STATE, new StoryReadStateMigrationJob());
+    }
+
+    if (lastSeenVersion < Version.THREAD_MESSAGE_SCHEMA_CHANGE) {
+      jobs.put(Version.THREAD_MESSAGE_SCHEMA_CHANGE, new DatabaseMigrationJob());
     }
 
     return jobs;

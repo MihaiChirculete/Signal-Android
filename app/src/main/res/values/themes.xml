@@ -425,10 +425,6 @@
         <item name="android:backgroundDimEnabled">true</item>
     </style>
 
-    <style name="Signal.DayNight.Dialog.Animated" parent="Signal.DayNight">
-        <item name="android:windowAnimationStyle">@style/FadeScale</item>
-    </style>
-
     <style name="Signal.DayNight.Dialog.Animated.Bottom" parent="Signal.DayNight">
         <item name="android:windowAnimationStyle">@style/FakeBottomSheet</item>
     </style>
@@ -536,6 +532,22 @@
     <style name="ShapeAppearanceOverlay.Signal.MediaSelection.Selected" parent="">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">8dp</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.Signal.DonationTogglePill.Start" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">12dp</item>
+        <item name="cornerSizeBottomLeft">12dp</item>
+        <item name="cornerSizeTopRight">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.Signal.DonationTogglePill.End" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">0dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeTopRight">12dp</item>
+        <item name="cornerSizeBottomRight">12dp</item>
     </style>
 
     <style name="ShapeAppearanceOverlay.Signal.Circle" parent="">

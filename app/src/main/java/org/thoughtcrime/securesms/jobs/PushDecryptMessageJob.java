@@ -7,6 +7,7 @@ import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 
+import org.signal.core.util.PendingIntentFlags;
 import org.signal.core.util.logging.Log;
 import org.signal.libsignal.protocol.IdentityKey;
 import org.signal.libsignal.protocol.SignalProtocolAddress;
@@ -24,6 +25,7 @@ import org.thoughtcrime.securesms.messages.MessageDecryptionUtil.DecryptionResul
 import org.thoughtcrime.securesms.notifications.NotificationChannels;
 import org.thoughtcrime.securesms.notifications.NotificationIds;
 import org.thoughtcrime.securesms.transport.RetryLaterException;
+import org.thoughtcrime.securesms.util.FeatureFlags;
 import org.thoughtcrime.securesms.util.TextSecurePreferences;
 import org.whispersystems.signalservice.api.SignalServiceMessageSender;
 import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
@@ -100,13 +102,20 @@ public final class PushDecryptMessageJob extends BaseJob {
     List<Job>        jobs = new LinkedList<>();
     DecryptionResult result = MessageDecryptionUtil.decrypt(context, envelope);
 
+    if (result.getState() == MessageState.DECRYPTED_OK && envelope.isStory() && !isStoryMessage(result)) {
+      Log.w(TAG, "Envelope was flagged as a story, but it did not have any story-related content! Dropping.");
+      return;
+    }
+
     if (result.getContent() != null) {
       if (result.getContent().getSenderKeyDistributionMessage().isPresent()) {
         handleSenderKeyDistributionMessage(result.getContent().getSender(), result.getContent().getSenderDevice(), result.getContent().getSenderKeyDistributionMessage().get());
       }
 
-      if (result.getContent().getPniSignatureMessage().isPresent()) {
+      if (FeatureFlags.phoneNumberPrivacy() && result.getContent().getPniSignatureMessage().isPresent()) {
         handlePniSignatureMessage(result.getContent().getSender(), result.getContent().getSenderDevice(), result.getContent().getPniSignatureMessage().get());
+      } else if (result.getContent().getPniSignatureMessage().isPresent()) {
+        Log.w(TAG, "Ignoring PNI signature because the feature flag is disabled!");
       }
 
       jobs.add(new PushProcessMessageJob(result.getContent(), smsMessageId, envelope.getTimestamp()));
@@ -170,19 +179,48 @@ public final class PushDecryptMessageJob extends BaseJob {
     }
   }
 
+  private boolean isStoryMessage(@NonNull DecryptionResult result) {
+    if (result.getContent() == null) {
+      return false;
+    }
+
+    if (result.getContent().getSenderKeyDistributionMessage().isPresent()) {
+      return true;
+    }
+
+    if (result.getContent().getStoryMessage().isPresent()) {
+      return true;
+    }
+
+    if (result.getContent().getDataMessage().isPresent() &&
+        result.getContent().getDataMessage().get().getStoryContext().isPresent() &&
+        result.getContent().getDataMessage().get().getGroupContext().isPresent())
+    {
+      return true;
+    }
+
+    if (result.getContent().getDataMessage().isPresent() &&
+        result.getContent().getDataMessage().get().getRemoteDelete().isPresent())
+    {
+      return true;
+    }
+
+    return false;
+  }
+
   private boolean needsMigration() {
     return TextSecurePreferences.getNeedsSqlCipherMigration(context);
   }
 
   private void postMigrationNotification() {
     NotificationManagerCompat.from(context).notify(NotificationIds.LEGACY_SQLCIPHER_MIGRATION,
-                                                   new NotificationCompat.Builder(context, NotificationChannels.getMessagesChannel(context))
+                                                   new NotificationCompat.Builder(context, NotificationChannels.getInstance().getMessagesChannel())
                                                                          .setSmallIcon(R.drawable.ic_notification)
                                                                          .setPriority(NotificationCompat.PRIORITY_HIGH)
                                                                          .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                                                                          .setContentTitle(context.getString(R.string.PushDecryptJob_new_locked_message))
                                                                          .setContentText(context.getString(R.string.PushDecryptJob_unlock_to_view_pending_messages))
-                                                                         .setContentIntent(PendingIntent.getActivity(context, 0, MainActivity.clearTop(context), 0))
+                                                                         .setContentIntent(PendingIntent.getActivity(context, 0, MainActivity.clearTop(context), PendingIntentFlags.mutable()))
                                                                          .setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_VIBRATE)
                                                                          .build());
 

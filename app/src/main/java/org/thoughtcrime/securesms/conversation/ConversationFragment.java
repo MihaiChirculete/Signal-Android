@@ -60,7 +60,6 @@ import androidx.core.view.ViewKt;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
-import androidx.navigation.fragment.NavHostFragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.RecyclerView.OnScrollListener;
@@ -72,6 +71,7 @@ import com.google.android.material.snackbar.Snackbar;
 
 import org.jetbrains.annotations.NotNull;
 import org.signal.core.util.DimensionUnit;
+import org.signal.core.util.Stopwatch;
 import org.signal.core.util.StreamUtil;
 import org.signal.core.util.concurrent.SignalExecutors;
 import org.signal.core.util.concurrent.SimpleTask;
@@ -90,6 +90,8 @@ import org.thoughtcrime.securesms.components.menu.ActionItem;
 import org.thoughtcrime.securesms.components.menu.SignalBottomActionBar;
 import org.thoughtcrime.securesms.components.recyclerview.SmoothScrollingLinearLayoutManager;
 import org.thoughtcrime.securesms.components.settings.app.AppSettingsActivity;
+import org.thoughtcrime.securesms.components.settings.app.subscription.donate.DonateToSignalFragment;
+import org.thoughtcrime.securesms.components.settings.app.subscription.donate.DonateToSignalType;
 import org.thoughtcrime.securesms.components.voice.VoiceNoteMediaControllerOwner;
 import org.thoughtcrime.securesms.components.voice.VoiceNotePlaybackState;
 import org.thoughtcrime.securesms.contactshare.Contact;
@@ -107,10 +109,10 @@ import org.thoughtcrime.securesms.conversation.mutiselect.forward.MultiselectFor
 import org.thoughtcrime.securesms.conversation.mutiselect.forward.MultiselectForwardFragmentArgs;
 import org.thoughtcrime.securesms.conversation.quotes.MessageQuotesBottomSheet;
 import org.thoughtcrime.securesms.conversation.ui.error.EnableCallNotificationSettingsDialog;
-import org.thoughtcrime.securesms.database.MessageDatabase;
-import org.thoughtcrime.securesms.database.MmsDatabase;
+import org.thoughtcrime.securesms.database.MessageTable;
+import org.thoughtcrime.securesms.database.MmsTable;
 import org.thoughtcrime.securesms.database.SignalDatabase;
-import org.thoughtcrime.securesms.database.SmsDatabase;
+import org.thoughtcrime.securesms.database.SmsTable;
 import org.thoughtcrime.securesms.database.model.InMemoryMessageRecord;
 import org.thoughtcrime.securesms.database.model.MediaMmsMessageRecord;
 import org.thoughtcrime.securesms.database.model.MessageId;
@@ -140,6 +142,7 @@ import org.thoughtcrime.securesms.main.Material3OnScrollHelperBinder;
 import org.thoughtcrime.securesms.messagedetails.MessageDetailsFragment;
 import org.thoughtcrime.securesms.messagerequests.MessageRequestState;
 import org.thoughtcrime.securesms.messagerequests.MessageRequestViewModel;
+import org.thoughtcrime.securesms.mms.AttachmentManager;
 import org.thoughtcrime.securesms.mms.GlideApp;
 import org.thoughtcrime.securesms.mms.OutgoingMediaMessage;
 import org.thoughtcrime.securesms.mms.PartAuthority;
@@ -147,6 +150,7 @@ import org.thoughtcrime.securesms.mms.Slide;
 import org.thoughtcrime.securesms.mms.TextSlide;
 import org.thoughtcrime.securesms.notifications.profiles.NotificationProfile;
 import org.thoughtcrime.securesms.notifications.v2.ConversationId;
+import org.thoughtcrime.securesms.payments.preferences.PaymentsActivity;
 import org.thoughtcrime.securesms.permissions.Permissions;
 import org.thoughtcrime.securesms.phonenumbers.PhoneNumberFormatter;
 import org.thoughtcrime.securesms.providers.BlobProvider;
@@ -179,7 +183,6 @@ import org.thoughtcrime.securesms.util.SignalLocalMetrics;
 import org.thoughtcrime.securesms.util.SignalProxyUtil;
 import org.thoughtcrime.securesms.util.SnapToTopDataObserver;
 import org.thoughtcrime.securesms.util.StickyHeaderDecoration;
-import org.signal.core.util.Stopwatch;
 import org.thoughtcrime.securesms.util.StorageUtil;
 import org.thoughtcrime.securesms.util.TextSecurePreferences;
 import org.thoughtcrime.securesms.util.TopToastPopup;
@@ -356,9 +359,9 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
 
     giphyMp4ProjectionRecycler = initializeGiphyMp4();
 
-    this.groupViewModel         = new ViewModelProvider(getParentFragment(), new ConversationGroupViewModel.Factory()).get(ConversationGroupViewModel.class);
+    this.groupViewModel         = new ViewModelProvider(getParentFragment(), (ViewModelProvider.Factory) new ConversationGroupViewModel.Factory()).get(ConversationGroupViewModel.class);
     this.messageCountsViewModel = new ViewModelProvider(getParentFragment()).get(MessageCountsViewModel.class);
-    this.conversationViewModel  = new ViewModelProvider(getParentFragment(), new ConversationViewModel.Factory()).get(ConversationViewModel.class);
+    this.conversationViewModel  = new ViewModelProvider(getParentFragment(), (ViewModelProvider.Factory) new ConversationViewModel.Factory()).get(ConversationViewModel.class);
 
     disposables.add(conversationViewModel.getChatColors().subscribe(chatColors -> {
       recyclerViewColorizer.setChatColors(chatColors);
@@ -1043,14 +1046,16 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
   }
 
   private AlertDialog.Builder buildRemoteDeleteConfirmationDialog(Set<MessageRecord> messageRecords) {
-    Context             context       = requireActivity();
     int                 messagesCount = messageRecords.size();
     AlertDialog.Builder builder       = new MaterialAlertDialogBuilder(getActivity());
 
     builder.setTitle(getActivity().getResources().getQuantityString(R.plurals.ConversationFragment_delete_selected_messages, messagesCount, messagesCount));
     builder.setCancelable(true);
 
-    builder.setPositiveButton(R.string.ConversationFragment_delete_for_me, (dialog, which) -> {
+    boolean isNoteToSelfDelete = isNoteToSelfDelete(messageRecords);
+
+    int deleteForMeResId = isNoteToSelfDelete ? R.string.ConversationFragment_delete_on_this_device : R.string.ConversationFragment_delete_for_me;
+    builder.setPositiveButton(deleteForMeResId, (dialog, which) -> {
       new ProgressDialogAsyncTask<Void, Void, Void>(getActivity(),
                                                     R.string.ConversationFragment_deleting,
                                                     R.string.ConversationFragment_deleting_messages)
@@ -1079,12 +1084,18 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
       }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     });
 
-    if (RemoteDeleteUtil.isValidSend(messageRecords, System.currentTimeMillis())) {
-      builder.setNeutralButton(R.string.ConversationFragment_delete_for_everyone, (dialog, which) -> handleDeleteForEveryone(messageRecords));
+    int deleteForEveryoneResId = isNoteToSelfDelete ? R.string.ConversationFragment_delete_everywhere : R.string.ConversationFragment_delete_for_everyone;
+
+    if (RemoteDeleteUtil.isValidSend(messageRecords, System.currentTimeMillis()) && (!isNoteToSelfDelete || TextSecurePreferences.isMultiDevice(requireContext()))) {
+      builder.setNeutralButton(deleteForEveryoneResId, (dialog, which) -> handleDeleteForEveryone(messageRecords));
     }
 
     builder.setNegativeButton(android.R.string.cancel, null);
     return builder;
+  }
+
+  private static boolean isNoteToSelfDelete(Set<MessageRecord> messageRecords) {
+    return messageRecords.stream().allMatch(messageRecord -> messageRecord.isOutgoing() && messageRecord.getRecipient().isSelf());
   }
 
   private void handleDeleteForEveryone(Set<MessageRecord> messageRecords) {
@@ -1096,7 +1107,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
       });
     };
 
-    if (SignalStore.uiHints().hasConfirmedDeleteForEveryoneOnce()) {
+    if (SignalStore.uiHints().hasConfirmedDeleteForEveryoneOnce() || isNoteToSelfDelete(messageRecords)) {
       deleteForEveryone.run();
     } else {
       new MaterialAlertDialogBuilder(requireActivity())
@@ -1120,7 +1131,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
     MultiselectForwardFragmentArgs.create(requireContext(),
                                           multiselectParts,
                                           args -> MultiselectForwardFragment.showBottomSheet(getChildFragmentManager(),
-                                                                                             args.withSendButtonTint(listener.getSendButtonTint())));
+                                                                                             args));
   }
 
   private void handleResendMessage(final MessageRecord message) {
@@ -1159,6 +1170,15 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
     });
   }
 
+  private void handleViewPaymentDetails(MessageRecord message) {
+    if (message instanceof MediaMmsMessageRecord) {
+      MediaMmsMessageRecord mediaMessage = (MediaMmsMessageRecord) message;
+      if (mediaMessage.isPaymentNotification() && mediaMessage.getPayment() != null) {
+        startActivity(PaymentsActivity.navigateToPaymentDetails(requireContext(), mediaMessage.getPayment().getUuid()));
+      }
+    }
+  }
+
   private void performSave(final MediaMmsMessageRecord message) {
     List<SaveAttachmentTask.Attachment> attachments = Stream.of(message.getSlideDeck().getSlides())
                                                             .filter(s -> s.getUri() != null && (s.hasImage() || s.hasVideo() || s.hasAudio() || s.hasDocument()))
@@ -1178,7 +1198,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
   }
 
   public long stageOutgoingMessage(OutgoingMediaMessage message) {
-    MessageRecord messageRecord = MmsDatabase.readerFor(message, threadId).getCurrent();
+    MessageRecord messageRecord = MmsTable.readerFor(message, threadId).getCurrent();
 
     if (getListAdapter() != null) {
       setLastSeen(0);
@@ -1189,7 +1209,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
   }
 
   public long stageOutgoingMessage(OutgoingTextMessage message, long messageId) {
-    MessageRecord messageRecord = SmsDatabase.readerFor(message, threadId, messageId).getCurrent();
+    MessageRecord messageRecord = SmsTable.readerFor(message, threadId, messageId).getCurrent();
 
     if (getListAdapter() != null) {
       setLastSeen(0);
@@ -1380,7 +1400,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
     }
 
     int position = getListLayoutManager().findFirstVisibleItemPosition();
-    if (position == getListAdapter().getItemCount() - 1) {
+    if (position == -1 || position == getListAdapter().getItemCount() - 1) {
       return;
     }
 
@@ -1486,6 +1506,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
     void    onVoiceNotePlaybackSpeedChanged(@NonNull Uri uri, float speed);
     void    onRegisterVoiceNoteCallbacks(@NonNull Observer<VoiceNotePlaybackState> onPlaybackStartObserver);
     void    onUnregisterVoiceNoteCallbacks(@NonNull Observer<VoiceNotePlaybackState> onPlaybackStartObserver);
+    void    onInviteToSignal();
   }
 
   private class ConversationScrollListener extends OnScrollListener {
@@ -1804,7 +1825,7 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
 
           ApplicationDependencies.getViewOnceMessageManager().scheduleIfNecessary();
 
-          ApplicationDependencies.getJobManager().add(new MultiDeviceViewOnceOpenJob(new MessageDatabase.SyncMessageId(messageRecord.getIndividualRecipient().getId(), messageRecord.getDateSent())));
+          ApplicationDependencies.getJobManager().add(new MultiDeviceViewOnceOpenJob(new MessageTable.SyncMessageId(messageRecord.getIndividualRecipient().getId(), messageRecord.getDateSent())));
 
           return tempUri;
         } catch (IOException e) {
@@ -2056,11 +2077,9 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
 
     @Override
     public void onDonateClicked() {
-      NavHostFragment navHostFragment = NavHostFragment.create(R.navigation.boosts);
-
       requireActivity().getSupportFragmentManager()
                        .beginTransaction()
-                       .add(navHostFragment, "boost_nav")
+                       .add(DonateToSignalFragment.Dialog.create(DonateToSignalType.ONE_TIME), "one_time_nav")
                        .commitNow();
     }
 
@@ -2081,6 +2100,11 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
     }
 
     @Override
+    public void onInviteToSignalClicked() {
+      listener.onInviteToSignal();
+    }
+
+    @Override
     public void onViewGiftBadgeClicked(@NonNull MessageRecord messageRecord) {
       if (!MessageRecordUtil.hasGiftBadge(messageRecord)) {
         return;
@@ -2098,6 +2122,17 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
       if (messageRecord.isOutgoing() && MessageRecordUtil.hasGiftBadge(messageRecord)) {
         conversationViewModel.markGiftBadgeRevealed(messageRecord.getId());
       }
+    }
+
+    @Override
+    public void onActivatePaymentsClicked() {
+      Intent intent = new Intent(requireContext(), PaymentsActivity.class);
+      startActivity(intent);
+    }
+
+    @Override
+    public void onSendPaymentClicked(@NonNull RecipientId recipientId) {
+      AttachmentManager.selectPayment(ConversationFragment.this, recipient.get());
     }
   }
 
@@ -2262,6 +2297,9 @@ public class ConversationFragment extends LoggingFragment implements Multiselect
           break;
         case COPY:
           handleCopyMessage(conversationMessage.getMultiselectCollection().toSet());
+          break;
+        case PAYMENT_DETAILS:
+          handleViewPaymentDetails(conversationMessage.getMessageRecord());
           break;
         case MULTISELECT:
           handleEnterMultiSelect(conversationMessage);

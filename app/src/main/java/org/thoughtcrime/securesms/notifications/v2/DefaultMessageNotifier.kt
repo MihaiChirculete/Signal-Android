@@ -14,7 +14,7 @@ import me.leolin.shortcutbadger.ShortcutBadger
 import org.signal.core.util.PendingIntentFlags
 import org.signal.core.util.logging.Log
 import org.thoughtcrime.securesms.R
-import org.thoughtcrime.securesms.database.MessageDatabase
+import org.thoughtcrime.securesms.database.MessageTable
 import org.thoughtcrime.securesms.database.SignalDatabase
 import org.thoughtcrime.securesms.dependencies.ApplicationDependencies
 import org.thoughtcrime.securesms.keyvalue.SignalStore
@@ -22,6 +22,7 @@ import org.thoughtcrime.securesms.messages.IncomingMessageObserver
 import org.thoughtcrime.securesms.notifications.MessageNotifier
 import org.thoughtcrime.securesms.notifications.MessageNotifier.ReminderReceiver
 import org.thoughtcrime.securesms.notifications.NotificationCancellationHelper
+import org.thoughtcrime.securesms.notifications.NotificationChannels
 import org.thoughtcrime.securesms.notifications.NotificationIds
 import org.thoughtcrime.securesms.notifications.profiles.NotificationProfile
 import org.thoughtcrime.securesms.notifications.profiles.NotificationProfiles
@@ -119,6 +120,8 @@ class DefaultMessageNotifier(context: Application) : MessageNotifier {
     reminderCount: Int,
     defaultBubbleState: BubbleState
   ) {
+    NotificationChannels.getInstance().ensureCustomChannelConsistency()
+
     val currentLockStatus: Boolean = KeyCachingService.isLocked(context)
     val currentPrivacyPreference: NotificationPrivacyPreference = SignalStore.settings().messageNotificationsPrivacy
     val notificationConfigurationChanged: Boolean = currentLockStatus != previousLockedStatus || currentPrivacyPreference != previousPrivacyPreference
@@ -138,16 +141,16 @@ class DefaultMessageNotifier(context: Application) : MessageNotifier {
     if (state.muteFilteredMessages.isNotEmpty()) {
       Log.i(TAG, "Marking ${state.muteFilteredMessages.size} muted messages as notified to skip notification")
       state.muteFilteredMessages.forEach { item ->
-        val messageDatabase: MessageDatabase = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
-        messageDatabase.markAsNotified(item.id)
+        val messageTable: MessageTable = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
+        messageTable.markAsNotified(item.id)
       }
     }
 
     if (state.profileFilteredMessages.isNotEmpty()) {
       Log.i(TAG, "Marking ${state.profileFilteredMessages.size} profile filtered messages as notified to skip notification")
       state.profileFilteredMessages.forEach { item ->
-        val messageDatabase: MessageDatabase = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
-        messageDatabase.markAsNotified(item.id)
+        val messageTable: MessageTable = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
+        messageTable.markAsNotified(item.id)
       }
     }
 
@@ -155,8 +158,8 @@ class DefaultMessageNotifier(context: Application) : MessageNotifier {
       Log.i(TAG, "Marking ${state.conversations.size} conversations as notified to skip notification")
       state.conversations.forEach { conversation ->
         conversation.notificationItems.forEach { item ->
-          val messageDatabase: MessageDatabase = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
-          messageDatabase.markAsNotified(item.id)
+          val messageTable: MessageTable = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
+          messageTable.markAsNotified(item.id)
         }
       }
       return
@@ -169,8 +172,8 @@ class DefaultMessageNotifier(context: Application) : MessageNotifier {
         .forEach { conversation ->
           cleanedUpThreads += conversation.thread
           conversation.notificationItems.forEach { item ->
-            val messageDatabase: MessageDatabase = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
-            messageDatabase.markAsNotified(item.id)
+            val messageTable: MessageTable = if (item.isMms) SignalDatabase.mms else SignalDatabase.sms
+            messageTable.markAsNotified(item.id)
           }
         }
       if (cleanedUpThreads.isNotEmpty()) {
@@ -285,16 +288,18 @@ class DefaultMessageNotifier(context: Application) : MessageNotifier {
     }
 
     val alarmManager: AlarmManager? = ContextCompat.getSystemService(context, AlarmManager::class.java)
-    val pendingIntent: PendingIntent = PendingIntent.getBroadcast(context, 0, Intent(context, ReminderReceiver::class.java), PendingIntentFlags.updateCurrent())
-    alarmManager?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + timeout, pendingIntent)
-    lastScheduledReminder = System.currentTimeMillis()
+    val pendingIntent: PendingIntent? = NotificationPendingIntentHelper.getBroadcast(context, 0, Intent(context, ReminderReceiver::class.java), PendingIntentFlags.updateCurrent())
+    if (pendingIntent != null) {
+      alarmManager?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + timeout, pendingIntent)
+      lastScheduledReminder = System.currentTimeMillis()
+    }
   }
 
   private fun clearReminderInternal(context: Context) {
     lastScheduledReminder = 0
     threadReminders.clear()
 
-    val pendingIntent: PendingIntent? = PendingIntent.getBroadcast(context, 0, Intent(context, ReminderReceiver::class.java), PendingIntentFlags.cancelCurrent())
+    val pendingIntent: PendingIntent? = NotificationPendingIntentHelper.getBroadcast(context, 0, Intent(context, ReminderReceiver::class.java), PendingIntentFlags.cancelCurrent())
     if (pendingIntent != null) {
       val alarmManager: AlarmManager? = ContextCompat.getSystemService(context, AlarmManager::class.java)
       alarmManager?.cancel(pendingIntent)

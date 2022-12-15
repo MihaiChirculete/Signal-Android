@@ -1,12 +1,9 @@
 package org.signal.core.util
 
-import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.ContentValues
 import android.text.TextUtils
 import androidx.annotation.VisibleForTesting
-import java.lang.NullPointerException
-import java.lang.StringBuilder
-import java.util.ArrayList
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.util.LinkedList
 import java.util.Locale
 import java.util.stream.Collectors
@@ -34,6 +31,28 @@ object SqlUtil {
       }
     }
     return tables
+  }
+
+  @JvmStatic
+  fun getAllTriggers(db: SupportSQLiteDatabase): List<String> {
+    val tables: MutableList<String> = LinkedList()
+    db.query("SELECT name FROM sqlite_master WHERE type=?", arrayOf("trigger")).use { cursor ->
+      while (cursor.moveToNext()) {
+        tables.add(cursor.getString(0))
+      }
+    }
+    return tables
+  }
+
+  /**
+   * Given a table, this will return a set of tables that it has a foreign key dependency on.
+   */
+  @JvmStatic
+  fun getForeignKeyDependencies(db: SupportSQLiteDatabase, table: String): Set<String> {
+    return db.query("PRAGMA foreign_key_list($table)")
+      .readToSet{ cursor ->
+        cursor.requireNonNullString("table")
+      }
   }
 
   @JvmStatic
@@ -66,7 +85,7 @@ object SqlUtil {
     return objects.map {
       when (it) {
         null -> throw NullPointerException("Cannot have null arg!")
-        is DatabaseId -> (it as DatabaseId?)!!.serialize()
+        is DatabaseId -> it.serialize()
         else -> it.toString()
       }
     }.toTypedArray()
@@ -188,21 +207,16 @@ object SqlUtil {
 
   /**
    * A convenient way of making queries in the form: WHERE [column] IN (?, ?, ..., ?)
-   * Handles breaking it 
+   * Handles breaking it
    */
+  @JvmOverloads
   @JvmStatic
-  fun buildCollectionQuery(column: String, values: Collection<Any?>): List<Query> {
-    return buildCollectionQuery(column, values, MAX_QUERY_ARGS)
-  }
-
-  @VisibleForTesting
-  @JvmStatic
-  fun buildCollectionQuery(column: String, values: Collection<Any?>, maxSize: Int): List<Query> {
+  fun buildCollectionQuery(column: String, values: Collection<Any?>, prefix: String = "", maxSize: Int = MAX_QUERY_ARGS): List<Query> {
     require(!values.isEmpty()) { "Must have values!" }
 
     return values
       .chunked(maxSize)
-      .map { batch -> buildSingleCollectionQuery(column, batch) }
+      .map { batch -> buildSingleCollectionQuery(column, batch, prefix) }
   }
 
   /**
@@ -211,8 +225,9 @@ object SqlUtil {
    * Important: Should only be used if you know the number of values is < 1000. Otherwise you risk creating a SQL statement this is too large.
    * Prefer [buildCollectionQuery] when possible.
    */
+  @JvmOverloads
   @JvmStatic
-  fun buildSingleCollectionQuery(column: String, values: Collection<Any?>): Query {
+  fun buildSingleCollectionQuery(column: String, values: Collection<Any?>, prefix: String = ""): Query {
     require(!values.isEmpty()) { "Must have values!" }
 
     val query = StringBuilder()
@@ -227,7 +242,7 @@ object SqlUtil {
       }
       i++
     }
-    return Query("$column IN ($query)", buildArgs(*args))
+    return Query("$prefix $column IN ($query)".trim(), buildArgs(*args))
   }
 
   @JvmStatic

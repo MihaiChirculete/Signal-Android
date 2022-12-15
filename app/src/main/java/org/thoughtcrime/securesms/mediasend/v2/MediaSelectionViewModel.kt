@@ -5,21 +5,27 @@ import android.os.Bundle
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
+import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.core.Maybe
 import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.disposables.Disposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import io.reactivex.rxjava3.kotlin.subscribeBy
+import io.reactivex.rxjava3.processors.BehaviorProcessor
+import io.reactivex.rxjava3.schedulers.Schedulers
 import io.reactivex.rxjava3.subjects.BehaviorSubject
 import io.reactivex.rxjava3.subjects.PublishSubject
 import io.reactivex.rxjava3.subjects.Subject
+import org.signal.core.util.BreakIteratorCompat
 import org.thoughtcrime.securesms.components.mention.MentionAnnotation
 import org.thoughtcrime.securesms.contacts.paged.ContactSearchKey
 import org.thoughtcrime.securesms.conversation.MessageSendType
 import org.thoughtcrime.securesms.mediasend.Media
 import org.thoughtcrime.securesms.mediasend.MediaSendActivityResult
 import org.thoughtcrime.securesms.mediasend.VideoEditorFragment
+import org.thoughtcrime.securesms.mediasend.v2.review.AddMessageCharacterCount
 import org.thoughtcrime.securesms.mms.MediaConstraints
 import org.thoughtcrime.securesms.mms.SentMediaQuality
 import org.thoughtcrime.securesms.recipients.Recipient
@@ -39,6 +45,7 @@ class MediaSelectionViewModel(
   initialMessage: CharSequence?,
   val isReply: Boolean,
   isStory: Boolean,
+  val isAddToGroupStoryFlow: Boolean,
   private val repository: MediaSelectionRepository,
   private val identityChangesSince: Long = System.currentTimeMillis()
 ) : ViewModel() {
@@ -53,6 +60,8 @@ class MediaSelectionViewModel(
     )
   )
 
+  private val addAMessageUpdatePublisher = BehaviorProcessor.create<CharSequence>()
+
   val isContactSelectionRequired = destination == MediaSelectionDestination.ChooseAfterMediaSelection
 
   val state: LiveData<MediaSelectionState> = store.stateLiveData
@@ -63,6 +72,22 @@ class MediaSelectionViewModel(
   val hudCommands: Observable<HudCommand> = internalHudCommands
 
   private val disposables = CompositeDisposable()
+
+  fun watchAddAMessageCount(): Flowable<AddMessageCharacterCount> {
+    return addAMessageUpdatePublisher
+      .onBackpressureLatest()
+      .map {
+        val iterator = BreakIteratorCompat.getInstance()
+        iterator.setText(it)
+        AddMessageCharacterCount(iterator.countBreaks())
+      }
+      .subscribeOn(Schedulers.io())
+      .observeOn(AndroidSchedulers.mainThread())
+  }
+
+  fun updateAddAMessageCount(input: CharSequence?) {
+    addAMessageUpdatePublisher.onNext(input ?: "")
+  }
 
   private val isMeteredDisposable: Disposable = repository.isMetered.subscribe { metered ->
     store.update {
@@ -114,6 +139,10 @@ class MediaSelectionViewModel(
 
   fun setTouchEnabled(isEnabled: Boolean) {
     store.update { it.copy(isTouchEnabled = isEnabled) }
+  }
+
+  fun setSuppressEmptyError(isSuppressed: Boolean) {
+    store.update { it.copy(suppressEmptyError = isSuppressed) }
   }
 
   fun addMedia(media: Media) {
@@ -206,10 +235,6 @@ class MediaSelectionViewModel(
   }
 
   fun removeMedia(media: Media) {
-    removeMedia(media, false)
-  }
-
-  private fun removeMedia(media: Media, suppressEmptyError: Boolean) {
     val snapshot = store.state
     val newMediaList = snapshot.selectedMedia - media
     val oldFocusIndex = snapshot.selectedMedia.indexOf(media)
@@ -228,7 +253,7 @@ class MediaSelectionViewModel(
       )
     }
 
-    if (newMediaList.isEmpty() && !suppressEmptyError) {
+    if (newMediaList.isEmpty() && !store.state.suppressEmptyError) {
       mediaErrors.onNext(MediaValidator.FilterError.NoItems())
     }
 
@@ -248,7 +273,8 @@ class MediaSelectionViewModel(
   fun removeCameraFirstCapture() {
     val cameraFirstCapture: Media? = store.state.cameraFirstCapture
     if (cameraFirstCapture != null) {
-      removeMedia(cameraFirstCapture, true)
+      setSuppressEmptyError(true)
+      removeMedia(cameraFirstCapture)
     }
   }
 
@@ -335,10 +361,10 @@ class MediaSelectionViewModel(
       return
     }
 
-    val filteredPreUploadMedia = if (Stories.isFeatureEnabled()) {
-      media.filter { Stories.MediaTransform.canPreUploadMedia(it) }
-    } else {
+    val filteredPreUploadMedia = if (destination is MediaSelectionDestination.SingleRecipient || !Stories.isFeatureEnabled()) {
       media
+    } else {
+      media.filter { Stories.MediaTransform.canPreUploadMedia(it) }
     }
 
     repository.uploadRepository.startUpload(filteredPreUploadMedia, store.state.recipient)
@@ -457,10 +483,11 @@ class MediaSelectionViewModel(
     private val initialMessage: CharSequence?,
     private val isReply: Boolean,
     private val isStory: Boolean,
+    private val isAddToGroupStoryFlow: Boolean,
     private val repository: MediaSelectionRepository
   ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-      return requireNotNull(modelClass.cast(MediaSelectionViewModel(destination, sendType, initialMedia, initialMessage, isReply, isStory, repository)))
+      return requireNotNull(modelClass.cast(MediaSelectionViewModel(destination, sendType, initialMedia, initialMessage, isReply, isStory, isAddToGroupStoryFlow, repository)))
     }
   }
 }

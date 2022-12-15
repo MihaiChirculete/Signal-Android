@@ -2,12 +2,16 @@ package org.thoughtcrime.securesms.jobs
 
 import androidx.core.os.LocaleListCompat
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.ObjectNode
+import org.json.JSONObject
 import org.signal.core.util.Hex
 import org.signal.core.util.ThreadUtil
 import org.signal.core.util.logging.Log
 import org.thoughtcrime.securesms.BuildConfig
-import org.thoughtcrime.securesms.database.MessageDatabase
-import org.thoughtcrime.securesms.database.RemoteMegaphoneDatabase
+import org.thoughtcrime.securesms.conversationlist.model.ConversationFilter
+import org.thoughtcrime.securesms.database.MessageTable
+import org.thoughtcrime.securesms.database.RemoteMegaphoneTable
 import org.thoughtcrime.securesms.database.SignalDatabase
 import org.thoughtcrime.securesms.database.model.RemoteMegaphoneRecord
 import org.thoughtcrime.securesms.database.model.addButton
@@ -147,7 +151,7 @@ class RetrieveRemoteAnnouncementsJob private constructor(private val force: Bool
     }
 
     if (!values.hasMetConversationRequirement) {
-      if ((SignalDatabase.threads.getArchivedConversationListCount() + SignalDatabase.threads.getUnarchivedConversationListCount()) < 6) {
+      if ((SignalDatabase.threads.getArchivedConversationListCount(ConversationFilter.OFF) + SignalDatabase.threads.getUnarchivedConversationListCount(ConversationFilter.OFF)) < 6) {
         Log.i(TAG, "User does not have enough conversations to show release channel")
         values.nextScheduledCheck = System.currentTimeMillis() + RETRIEVE_FREQUENCY
         return
@@ -199,7 +203,7 @@ class RetrieveRemoteAnnouncementsJob private constructor(private val force: Bool
         }
 
         ThreadUtil.sleep(5)
-        val insertResult: MessageDatabase.InsertResult? = ReleaseChannel.insertReleaseChannelMessage(
+        val insertResult: MessageTable.InsertResult? = ReleaseChannel.insertReleaseChannelMessage(
           recipientId = values.releaseChannelRecipientId!!,
           body = body,
           threadId = threadId,
@@ -275,7 +279,9 @@ class RetrieveRemoteAnnouncementsJob private constructor(private val force: Bool
             title = megaphone.translation.title,
             body = megaphone.translation.body,
             primaryActionText = megaphone.translation.primaryCtaText,
-            secondaryActionText = megaphone.translation.secondaryCtaText
+            secondaryActionText = megaphone.translation.secondaryCtaText,
+            primaryActionData = megaphone.remoteMegaphone.primaryCtaData?.takeIf { it is ObjectNode }?.let { JSONObject(it.toString()) },
+            secondaryActionData = megaphone.remoteMegaphone.secondaryCtaData?.takeIf { it is ObjectNode }?.let { JSONObject(it.toString()) }
           )
 
           SignalDatabase.remoteMegaphones.insert(record)
@@ -288,7 +294,7 @@ class RetrieveRemoteAnnouncementsJob private constructor(private val force: Bool
 
     val megaphonesToDelete = existingMegaphones
       .filterKeys { !manifestMegaphones.contains(it) }
-      .filterValues { it.minimumVersion != RemoteMegaphoneDatabase.VERSION_FINISHED }
+      .filterValues { it.minimumVersion != RemoteMegaphoneTable.VERSION_FINISHED }
 
     if (megaphonesToDelete.isNotEmpty()) {
       Log.i(TAG, "Clearing ${megaphonesToDelete.size} stale megaphones ${megaphonesToDelete.keys}")
@@ -384,7 +390,9 @@ class RetrieveRemoteAnnouncementsJob private constructor(private val force: Bool
     @JsonProperty val showForNumberOfDays: Long?,
     @JsonProperty val conditionalId: String?,
     @JsonProperty val primaryCtaId: String?,
-    @JsonProperty val secondaryCtaId: String?
+    @JsonProperty val secondaryCtaId: String?,
+    @JsonProperty val primaryCtaData: JsonNode?,
+    @JsonProperty val secondaryCtaData: JsonNode?
   )
 
   data class TranslatedReleaseNote(

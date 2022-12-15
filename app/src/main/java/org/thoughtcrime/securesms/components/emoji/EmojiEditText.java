@@ -13,6 +13,8 @@ import androidx.appcompat.widget.AppCompatEditText;
 import org.thoughtcrime.securesms.R;
 import org.thoughtcrime.securesms.components.emoji.EmojiProvider.EmojiDrawable;
 import org.thoughtcrime.securesms.keyvalue.SignalStore;
+import org.thoughtcrime.securesms.util.EditTextExtensionsKt;
+import org.thoughtcrime.securesms.util.TextSecurePreferences;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -40,6 +42,7 @@ public class EmojiEditText extends AppCompatEditText {
 
     if (!isInEditMode() && (forceCustom || !SignalStore.settings().isPreferSystemEmoji())) {
       setFilters(appendEmojiFilter(this.getFilters(), jumboEmoji));
+      setEmojiCompatEnabled(false);
     }
 
     super.setOnFocusChangeListener((v, hasFocus) -> {
@@ -47,6 +50,10 @@ public class EmojiEditText extends AppCompatEditText {
         listener.onFocusChange(v, hasFocus);
       }
     });
+
+    if (!isInEditMode()) {
+      EditTextExtensionsKt.setIncognitoKeyboardEnabled(this, TextSecurePreferences.isIncognitoKeyboardEnabled(context));
+    }
   }
 
   public void insertEmoji(String emoji) {
